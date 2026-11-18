@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import re
 import json
 import subprocess
 import threading
@@ -12,25 +13,41 @@ REPORT_PATH = os.path.expanduser("~/bluebuck_report.json")
 class ProtocolWifiteGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("THE PROTOCOL WIFITE — by Laltesh Chaudhary")
-        self.root.geometry("860x540")
+        self.root.title("THE PROTOCOL WIFITE & TOOTH — by Laltesh Chaudhary")
+        self.root.geometry("920x580")
         self.root.configure(bg="#0d1117")
 
-        self.networks = []
-        self.iface = self.get_wifi_interface()
+        self.wifi_networks = []
+        self.bt_devices = []
+        self.wifi_iface = self.get_wifi_interface()
+        self.bt_iface = self.get_bt_interface()
 
         self.setup_styles()
         self.build_ui()
 
-        if not self.iface:
-            self.set_status("[!] No Wi-Fi interface detected. Attach a wireless adapter.", "#ff5555")
+        if self.wifi_iface:
+            self.start_wifi_scan()
         else:
-            self.set_status(f"[*] Ready on interface: {self.iface}", "#58a6ff")
-            self.start_scan_thread()
+            self.set_status("[!] No Wi-Fi adapter detected. Bluetooth tab ready.", "#d29922")
 
     def setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
+
+        style.configure("TNotebook", background="#0d1117", borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            background="#161b22",
+            foreground="#8b949e",
+            padding=[16, 8],
+            font=("Monospace", 10, "bold"),
+            borderwidth=0
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", "#1f6feb")],
+            foreground=[("selected", "#ffffff")]
+        )
 
         style.configure(
             "Treeview",
@@ -51,118 +68,67 @@ class ProtocolWifiteGUI:
         style.map("Treeview", background=[("selected", "#1f6feb")], foreground=[("selected", "#ffffff")])
 
     def build_ui(self):
+        # Top Header Banner
         header_frame = tk.Frame(self.root, bg="#0d1117", pady=12)
         header_frame.pack(fill=tk.X, padx=16)
 
-        title_lbl = tk.Label(
+        tk.Label(
             header_frame,
             text="⚡ THE PROTOCOL WIFITE",
             font=("Monospace", 18, "bold"),
             fg="#00ffcc",
             bg="#0d1117"
-        )
-        title_lbl.pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT)
 
-        author_lbl = tk.Label(
+        tk.Label(
             header_frame,
             text="by Laltesh Chaudhary",
             font=("Monospace", 11, "italic"),
             fg="#8b949e",
             bg="#0d1117"
-        )
-        author_lbl.pack(side=tk.LEFT, padx=12, pady=(6, 0))
+        ).pack(side=tk.LEFT, padx=12, pady=(6, 0))
 
-        self.iface_lbl = tk.Label(
+        tk.Button(
             header_frame,
-            text=f"Interface: {self.iface or 'None'}",
-            font=("Monospace", 10, "bold"),
-            fg="#58a6ff",
-            bg="#161b22",
-            padx=10,
-            pady=4
-        )
-        self.iface_lbl.pack(side=tk.RIGHT)
-
-        ctrl_frame = tk.Frame(self.root, bg="#0d1117", pady=6)
-        ctrl_frame.pack(fill=tk.X, padx=16)
-
-        self.scan_btn = tk.Button(
-            ctrl_frame,
-            text="↻ Scan Networks",
-            command=self.start_scan_thread,
-            bg="#238636",
-            fg="#ffffff",
-            activebackground="#2ea043",
-            activeforeground="#ffffff",
-            font=("Monospace", 10, "bold"),
-            relief=tk.FLAT,
-            padx=14,
-            pady=6,
-            cursor="hand2"
-        )
-        self.scan_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.pair_btn = tk.Button(
-            ctrl_frame,
-            text="🔗 Pair Selected Network",
-            command=self.prompt_and_connect,
-            bg="#1f6feb",
-            fg="#ffffff",
-            activebackground="#388bfd",
-            activeforeground="#ffffff",
-            font=("Monospace", 10, "bold"),
-            relief=tk.FLAT,
-            padx=14,
-            pady=6,
-            cursor="hand2"
-        )
-        self.pair_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.export_btn = tk.Button(
-            ctrl_frame,
-            text="💾 Save JSON Report",
+            text="💾 Save Full Report",
             command=self.save_report,
             bg="#30363d",
             fg="#c9d1d9",
             activebackground="#484f58",
             activeforeground="#ffffff",
-            font=("Monospace", 10),
+            font=("Monospace", 9, "bold"),
             relief=tk.FLAT,
             padx=12,
-            pady=6,
+            pady=4,
             cursor="hand2"
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+
+        self.iface_lbl = tk.Label(
+            header_frame,
+            text=f"Wi-Fi: {self.wifi_iface or 'None'} | BT: {self.bt_iface or 'None'}",
+            font=("Monospace", 9, "bold"),
+            fg="#58a6ff",
+            bg="#161b22",
+            padx=10,
+            pady=5
         )
-        self.export_btn.pack(side=tk.LEFT)
+        self.iface_lbl.pack(side=tk.RIGHT)
 
-        table_frame = tk.Frame(self.root, bg="#0d1117")
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        # Tabbed Notebook
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=4)
 
-        cols = ("status", "ssid", "bssid", "chan", "signal", "security")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", selectmode="browse")
+        self.wifi_tab = tk.Frame(self.notebook, bg="#0d1117")
+        self.bt_tab = tk.Frame(self.notebook, bg="#0d1117")
 
-        self.tree.heading("status", text="STATE")
-        self.tree.heading("ssid", text="SSID (Network Name)")
-        self.tree.heading("bssid", text="BSSID (MAC)")
-        self.tree.heading("chan", text="CH")
-        self.tree.heading("signal", text="SIGNAL")
-        self.tree.heading("security", text="SECURITY")
+        self.notebook.add(self.wifi_tab, text=" 📡 Wi-Fi Scanner ")
+        self.notebook.add(self.bt_tab, text=" 🦷 Protocol-Tooth (Bluetooth) ")
 
-        self.tree.column("status", width=80, anchor=tk.CENTER)
-        self.tree.column("ssid", width=240, anchor=tk.W)
-        self.tree.column("bssid", width=160, anchor=tk.CENTER)
-        self.tree.column("chan", width=60, anchor=tk.CENTER)
-        self.tree.column("signal", width=90, anchor=tk.CENTER)
-        self.tree.column("security", width=150, anchor=tk.CENTER)
+        self.build_wifi_tab()
+        self.build_bt_tab()
 
-        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scrollbar.set)
-
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.tree.bind("<Double-1>", lambda e: self.prompt_and_connect())
-
-        self.status_var = tk.StringVar(value="Initializing...")
+        # Bottom Status Bar
+        self.status_var = tk.StringVar(value="Ready.")
         self.status_bar = tk.Label(
             self.root,
             textvariable=self.status_var,
@@ -175,6 +141,148 @@ class ProtocolWifiteGUI:
         )
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
+    def build_wifi_tab(self):
+        ctrl = tk.Frame(self.wifi_tab, bg="#0d1117", pady=8)
+        ctrl.pack(fill=tk.X)
+
+        self.wifi_scan_btn = tk.Button(
+            ctrl,
+            text="↻ Scan Wi-Fi",
+            command=self.start_wifi_scan,
+            bg="#238636",
+            fg="#ffffff",
+            activebackground="#2ea043",
+            activeforeground="#ffffff",
+            font=("Monospace", 10, "bold"),
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2"
+        )
+        self.wifi_scan_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.wifi_pair_btn = tk.Button(
+            ctrl,
+            text="🔗 Pair Selected Wi-Fi",
+            command=self.prompt_wifi_connect,
+            bg="#1f6feb",
+            fg="#ffffff",
+            activebackground="#388bfd",
+            activeforeground="#ffffff",
+            font=("Monospace", 10, "bold"),
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2"
+        )
+        self.wifi_pair_btn.pack(side=tk.LEFT)
+
+        tbl_frame = tk.Frame(self.wifi_tab, bg="#0d1117")
+        tbl_frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ("status", "ssid", "bssid", "chan", "signal", "security")
+        self.wifi_tree = ttk.Treeview(tbl_frame, columns=cols, show="headings", selectmode="browse")
+
+        self.wifi_tree.heading("status", text="STATE")
+        self.wifi_tree.heading("ssid", text="SSID (Network Name)")
+        self.wifi_tree.heading("bssid", text="BSSID (MAC)")
+        self.wifi_tree.heading("chan", text="CH")
+        self.wifi_tree.heading("signal", text="SIGNAL")
+        self.wifi_tree.heading("security", text="SECURITY")
+
+        self.wifi_tree.column("status", width=90, anchor=tk.CENTER)
+        self.wifi_tree.column("ssid", width=250, anchor=tk.W)
+        self.wifi_tree.column("bssid", width=160, anchor=tk.CENTER)
+        self.wifi_tree.column("chan", width=60, anchor=tk.CENTER)
+        self.wifi_tree.column("signal", width=90, anchor=tk.CENTER)
+        self.wifi_tree.column("security", width=160, anchor=tk.CENTER)
+
+        sb = ttk.Scrollbar(tbl_frame, orient=tk.VERTICAL, command=self.wifi_tree.yview)
+        self.wifi_tree.configure(yscroll=sb.set)
+
+        self.wifi_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.wifi_tree.bind("<Double-1>", lambda e: self.prompt_wifi_connect())
+
+    def build_bt_tab(self):
+        ctrl = tk.Frame(self.bt_tab, bg="#0d1117", pady=8)
+        ctrl.pack(fill=tk.X)
+
+        self.bt_scan_btn = tk.Button(
+            ctrl,
+            text="↻ Scan Bluetooth (8s)",
+            command=self.start_bt_scan,
+            bg="#238636",
+            fg="#ffffff",
+            activebackground="#2ea043",
+            activeforeground="#ffffff",
+            font=("Monospace", 10, "bold"),
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2"
+        )
+        self.bt_scan_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bt_pair_btn = tk.Button(
+            ctrl,
+            text="🦷 Pair & Connect Selected",
+            command=self.prompt_bt_connect,
+            bg="#1f6feb",
+            fg="#ffffff",
+            activebackground="#388bfd",
+            activeforeground="#ffffff",
+            font=("Monospace", 10, "bold"),
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2"
+        )
+        self.bt_pair_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bt_disc_btn = tk.Button(
+            ctrl,
+            text="✕ Disconnect",
+            command=self.disconnect_bt,
+            bg="#da3633",
+            fg="#ffffff",
+            activebackground="#f85149",
+            activeforeground="#ffffff",
+            font=("Monospace", 10, "bold"),
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2"
+        )
+        self.bt_disc_btn.pack(side=tk.LEFT)
+
+        tbl_frame = tk.Frame(self.bt_tab, bg="#0d1117")
+        tbl_frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ("status", "name", "mac", "paired", "trusted")
+        self.bt_tree = ttk.Treeview(tbl_frame, columns=cols, show="headings", selectmode="browse")
+
+        self.bt_tree.heading("status", text="STATE")
+        self.bt_tree.heading("name", text="DEVICE NAME")
+        self.bt_tree.heading("mac", text="MAC ADDRESS")
+        self.bt_tree.heading("paired", text="PAIRED")
+        self.bt_tree.heading("trusted", text="TRUSTED")
+
+        self.bt_tree.column("status", width=110, anchor=tk.CENTER)
+        self.bt_tree.column("name", width=320, anchor=tk.W)
+        self.bt_tree.column("mac", width=180, anchor=tk.CENTER)
+        self.bt_tree.column("paired", width=100, anchor=tk.CENTER)
+        self.bt_tree.column("trusted", width=100, anchor=tk.CENTER)
+
+        sb = ttk.Scrollbar(tbl_frame, orient=tk.VERTICAL, command=self.bt_tree.yview)
+        self.bt_tree.configure(yscroll=sb.set)
+
+        self.bt_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.bt_tree.bind("<Double-1>", lambda e: self.prompt_bt_connect())
+
     def set_status(self, text, color="#58a6ff"):
         self.status_var.set(text)
         self.status_bar.configure(fg=color)
@@ -186,21 +294,30 @@ class ProtocolWifiteGUI:
                 return line.split(":")[0]
         return None
 
-    def start_scan_thread(self):
-        if not self.iface:
-            self.iface = self.get_wifi_interface()
-            if not self.iface:
-                messagebox.showerror("Interface Error", "No wireless interface detected!")
-                return
-            self.iface_lbl.configure(text=f"Interface: {self.iface}")
+    def get_bt_interface(self):
+        res = subprocess.run(["hciconfig"], capture_output=True, text=True)
+        match = re.search(r"^(hci\d+):", res.stdout, re.MULTILINE)
+        return match.group(1) if match else None
 
-        self.scan_btn.configure(state=tk.DISABLED, text="Scanning...")
-        self.set_status(f"[*] Scanning Wi-Fi channels on {self.iface}...", "#d29922")
-        threading.Thread(target=self.scan_worker, daemon=True).start()
+    def refresh_interfaces(self):
+        self.wifi_iface = self.get_wifi_interface()
+        self.bt_iface = self.get_bt_interface()
+        self.iface_lbl.configure(text=f"Wi-Fi: {self.wifi_iface or 'None'} | BT: {self.bt_iface or 'None'}")
 
-    def scan_worker(self):
-        subprocess.run(["nmcli", "device", "wifi", "rescan", "ifname", self.iface], stderr=subprocess.DEVNULL)
-        cmd = ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", self.iface]
+    # ---------------- WI-FI LOGIC ---------------- #
+    def start_wifi_scan(self):
+        self.refresh_interfaces()
+        if not self.wifi_iface:
+            messagebox.showerror("Wi-Fi Error", "No wireless interface detected!")
+            return
+
+        self.wifi_scan_btn.configure(state=tk.DISABLED, text="Scanning...")
+        self.set_status(f"[*] Scanning Wi-Fi channels on {self.wifi_iface}...", "#d29922")
+        threading.Thread(target=self.wifi_scan_worker, daemon=True).start()
+
+    def wifi_scan_worker(self):
+        subprocess.run(["nmcli", "device", "wifi", "rescan", "ifname", self.wifi_iface], stderr=subprocess.DEVNULL)
+        cmd = ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", self.wifi_iface]
         res = subprocess.run(cmd, capture_output=True, text=True)
 
         parsed = []
@@ -218,82 +335,177 @@ class ProtocolWifiteGUI:
                     "security": parts[5] if parts[5] else "OPEN"
                 })
 
-        self.networks = sorted(parsed, key=lambda x: x["signal"], reverse=True)
-        self.root.after(0, self.update_table)
+        self.wifi_networks = sorted(parsed, key=lambda x: x["signal"], reverse=True)
+        self.root.after(0, self.update_wifi_table)
 
-    def update_table(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
+    def update_wifi_table(self):
+        for row in self.wifi_tree.get_children():
+            self.wifi_tree.delete(row)
 
-        for idx, net in enumerate(self.networks):
+        for idx, net in enumerate(self.wifi_networks):
             state_str = "CONNECTED" if net["in_use"] else "READY"
-            self.tree.insert(
+            self.wifi_tree.insert(
                 "",
                 tk.END,
                 iid=str(idx),
-                values=(
-                    state_str,
-                    net["ssid"],
-                    net["bssid"],
-                    net["channel"],
-                    f"{net['signal']}%",
-                    net["security"]
-                )
+                values=(state_str, net["ssid"], net["bssid"], net["channel"], f"{net['signal']}%", net["security"])
             )
 
-        self.scan_btn.configure(state=tk.NORMAL, text="↻ Scan Networks")
-        self.set_status(f"[+] Scan complete. Found {len(self.networks)} networks. Double-click any row to pair.", "#3fb950")
+        self.wifi_scan_btn.configure(state=tk.NORMAL, text="↻ Scan Wi-Fi")
+        self.set_status(f"[+] Wi-Fi scan complete. Found {len(self.wifi_networks)} networks.", "#3fb950")
 
-    def prompt_and_connect(self):
-        selected = self.tree.selection()
+    def prompt_wifi_connect(self):
+        selected = self.wifi_tree.selection()
         if not selected:
-            messagebox.showwarning("Select Network", "Please click on a Wi-Fi network from the list first.")
+            messagebox.showwarning("Select Wi-Fi", "Click on a Wi-Fi network from the table first.")
             return
 
-        target = self.networks[int(selected[0])]
-        ssid = target["ssid"]
-        bssid = target["bssid"]
-        security = target["security"]
-
+        target = self.wifi_networks[int(selected[0])]
         password = None
-        if security != "OPEN" and "--" not in security:
+        if target["security"] != "OPEN" and "--" not in target["security"]:
             password = simpledialog.askstring(
                 "THE PROTOCOL WIFITE — Authenticate",
-                f"Enter Wi-Fi password for:\n{ssid} ({bssid})",
+                f"Enter Wi-Fi password for:\n{target['ssid']} ({target['bssid']})",
                 show="*",
                 parent=self.root
             )
             if password is None:
                 return
 
-        self.pair_btn.configure(state=tk.DISABLED, text="Pairing...")
-        self.set_status(f"[*] Authenticating with {ssid} ({bssid})...", "#d29922")
-        threading.Thread(target=self.connect_worker, args=(target, password), daemon=True).start()
+        self.wifi_pair_btn.configure(state=tk.DISABLED, text="Pairing...")
+        self.set_status(f"[*] Authenticating with {target['ssid']} ({target['bssid']})...", "#d29922")
+        threading.Thread(target=self.wifi_connect_worker, args=(target, password), daemon=True).start()
 
-    def connect_worker(self, target, password):
-        cmd = ["nmcli", "device", "wifi", "connect", target["bssid"], "ifname", self.iface]
+    def wifi_connect_worker(self, target, password):
+        cmd = ["nmcli", "device", "wifi", "connect", target["bssid"], "ifname", self.wifi_iface]
         if password:
             cmd.extend(["password", password])
-
         res = subprocess.run(cmd, capture_output=True, text=True)
-        self.root.after(0, lambda: self.finish_connect(target, res))
+        self.root.after(0, lambda: self.finish_wifi_connect(target, res))
 
-    def finish_connect(self, target, res):
-        self.pair_btn.configure(state=tk.NORMAL, text="🔗 Pair Selected Network")
+    def finish_wifi_connect(self, target, res):
+        self.wifi_pair_btn.configure(state=tk.NORMAL, text="🔗 Pair Selected Wi-Fi")
         if res.returncode == 0:
-            self.set_status(f"[+] Successfully paired with {target['ssid']} ({target['bssid']})!", "#3fb950")
+            self.set_status(f"[+] Connected to {target['ssid']}!", "#3fb950")
             messagebox.showinfo("Connected", f"Successfully paired with {target['ssid']}!")
-            self.start_scan_thread()
+            self.start_wifi_scan()
         else:
             err = res.stderr.strip() or res.stdout.strip()
-            self.set_status(f"[-] Connection failed: {err}", "#ff5555")
+            self.set_status(f"[-] Wi-Fi connection failed: {err}", "#ff5555")
             messagebox.showerror("Pairing Failed", f"Could not connect to {target['ssid']}:\n\n{err}")
 
+    # ---------------- BLUETOOTH (PROTOCOL-TOOTH) LOGIC ---------------- #
+    def start_bt_scan(self):
+        self.refresh_interfaces()
+        self.bt_scan_btn.configure(state=tk.DISABLED, text="Scanning (8s)...")
+        self.set_status("[*] Starting Bluetooth service & scanning nearby devices for 8 seconds...", "#d29922")
+        threading.Thread(target=self.bt_scan_worker, daemon=True).start()
+
+    def bt_scan_worker(self):
+        subprocess.run(["systemctl", "start", "bluetooth"], stderr=subprocess.DEVNULL)
+        subprocess.run(["rfkill", "unblock", "bluetooth"], stderr=subprocess.DEVNULL)
+        subprocess.run(["bluetoothctl", "power", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Actively scan for 8 seconds to populate bluetoothctl cache
+        subprocess.run(["bluetoothctl", "--timeout", "8", "scan", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        res = subprocess.run(["bluetoothctl", "devices"], capture_output=True, text=True)
+        devices = []
+        for line in res.stdout.strip().split("\n"):
+            match = re.match(r"^Device\s+([0-9A-Fa-f:]{17})\s+(.*)$", line.strip())
+            if match:
+                mac = match.group(1)
+                name = match.group(2).strip() or "<Unknown Device>"
+
+                info_res = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True).stdout
+                paired = "yes" in re.findall(r"Paired:\s+(\w+)", info_res)
+                trusted = "yes" in re.findall(r"Trusted:\s+(\w+)", info_res)
+                connected = "yes" in re.findall(r"Connected:\s+(\w+)", info_res)
+
+                devices.append({
+                    "mac": mac,
+                    "name": name,
+                    "paired": paired,
+                    "trusted": trusted,
+                    "connected": connected
+                })
+
+        self.bt_devices = sorted(devices, key=lambda d: (d["connected"], d["paired"]), reverse=True)
+        self.root.after(0, self.update_bt_table)
+
+    def update_bt_table(self):
+        for row in self.bt_tree.get_children():
+            self.bt_tree.delete(row)
+
+        for idx, dev in enumerate(self.bt_devices):
+            state = "CONNECTED" if dev["connected"] else "AVAILABLE"
+            self.bt_tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    state,
+                    dev["name"],
+                    dev["mac"],
+                    "YES" if dev["paired"] else "NO",
+                    "YES" if dev["trusted"] else "NO"
+                )
+            )
+
+        self.bt_scan_btn.configure(state=tk.NORMAL, text="↻ Scan Bluetooth (8s)")
+        self.set_status(f"[+] Bluetooth scan complete. Found {len(self.bt_devices)} devices.", "#3fb950")
+
+    def prompt_bt_connect(self):
+        selected = self.bt_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select Bluetooth Device", "Click on a Bluetooth device from the table first.")
+            return
+
+        target = self.bt_devices[int(selected[0])]
+        self.bt_pair_btn.configure(state=tk.DISABLED, text="Pairing...")
+        self.set_status(f"[*] Pairing and connecting to {target['name']} ({target['mac']})...", "#d29922")
+        threading.Thread(target=self.bt_connect_worker, args=(target,), daemon=True).start()
+
+    def bt_connect_worker(self, target):
+        mac = target["mac"]
+        subprocess.run(["bluetoothctl", "trust", mac], capture_output=True, text=True)
+        subprocess.run(["bluetoothctl", "pair", mac], capture_output=True, text=True)
+        res = subprocess.run(["bluetoothctl", "connect", mac], capture_output=True, text=True)
+        self.root.after(0, lambda: self.finish_bt_connect(target, res))
+
+    def finish_bt_connect(self, target, res):
+        self.bt_pair_btn.configure(state=tk.NORMAL, text="🦷 Pair & Connect Selected")
+        output = (res.stdout + "\n" + res.stderr).strip()
+        if "Connection successful" in output or res.returncode == 0:
+            self.set_status(f"[+] Connected to Bluetooth device {target['name']} ({target['mac']})!", "#3fb950")
+            messagebox.showinfo("Bluetooth Connected", f"Successfully paired & connected to:\n{target['name']} ({target['mac']})")
+            self.start_bt_scan()
+        else:
+            self.set_status(f"[-] Bluetooth connection failed for {target['mac']}", "#ff5555")
+            messagebox.showerror("Bluetooth Failed", f"Could not connect to {target['name']}:\n\n{output}")
+
+    def disconnect_bt(self):
+        selected = self.bt_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select Device", "Select a Bluetooth device to disconnect.")
+            return
+        target = self.bt_devices[int(selected[0])]
+        subprocess.run(["bluetoothctl", "disconnect", target["mac"]], capture_output=True)
+        self.set_status(f"[*] Disconnected {target['name']} ({target['mac']})", "#58a6ff")
+        self.start_bt_scan()
+
+    # ---------------- EXPORT REPORT ---------------- #
     def save_report(self):
         try:
+            report_data = {
+                "tool": "THE PROTOCOL WIFITE & TOOTH",
+                "author": "Laltesh Chaudhary",
+                "wifi_networks": self.wifi_networks,
+                "bluetooth_devices": self.bt_devices
+            }
             with open(REPORT_PATH, "w") as f:
-                json.dump(self.networks, f, indent=4)
-            self.set_status(f"[+] Report exported to {REPORT_PATH}", "#3fb950")
+                json.dump(report_data, f, indent=4)
+            self.set_status(f"[+] Unified Wi-Fi & Bluetooth report saved to {REPORT_PATH}", "#3fb950")
         except Exception as e:
             self.set_status(f"[-] Failed to save report: {e}", "#ff5555")
 
